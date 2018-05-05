@@ -1,11 +1,14 @@
-function [V, E, images] = readImages(folder, file_name, num_pts, method, register)
+function [V, E, images] = readImages(folder, file_name, format, num_pts, method, register)
 
 % read in the testile info
-formatSpec = '%s %f %f %d %d';
-data = readtable([folder file_name], 'Delimiter', ' ', 'Format', formatSpec);
+% formatSpec = '%s %f %f %d %d';
+data = readtable([folder file_name], 'Delimiter', ' ', 'Format', format);
 img_names = char(data{:,1});
 
-[optimizer, metric] = imregconfig('multimodal');
+% [optimizer, metric] = imregconfig('multimodal');
+
+ransac_n = 30; % Max number of iterations
+ransac_eps = 5; % Acceptable alignment error 
 
 bw_images = [];
 % read each image and gather needed data
@@ -19,7 +22,7 @@ goal = (max(means)+min(means))/2;
 [~,i] = min(abs(means-goal));
 
 med_imgs = double(rgb2gray(imread([folder img_names(i,:)])));
-mi = med_imgs;
+mi_idx = i;
 
 locs = [];
 if strcmp(method, 'manual')
@@ -53,37 +56,43 @@ end
 
 V = [];
 E = [];
-images = [];
+images = uint8([]);
+
 
 % read each image and gather needed data
-for i = 1:size(img_names,1) % for each image
+for i = [mi_idx:size(img_names,1) mi_idx-1:-1:1] % for each image
+    
+    if i == mi_idx || i == mi_idx-1
+        mi = imread([folder img_names(mi_idx,:)]);
+    end
+    
     exp = 1./data{i,2};
     log_exp = log(exp);
     img = imread([folder img_names(i,:)]);
     
-%     images(:,:,:,i) = img;
+    if register
+        [xs, xd] = genSIFTMatches(img, mi);
+        [~, H_3x3] = runRANSAC(xs, xd, ransac_n, ransac_eps);
+
+        nr = size(img, 1);
+        nc = size(img, 2);
+
+        [~, warped_img] = backwardWarpImg(double(img), inv(H_3x3), [nc, nr]);
+        images(:,:,:,i) = uint8(warped_img);
+    else
+        images(:,:,:,i) = img;
+    end
+        
     E(i) = log_exp;
     for c = 1:3             % for each channel
-        if register
-            registered = imregister(img(:,:,c), mi, 'rigid', optimizer, metric);
-        else
-            registered = img(:,:,c);
-        end
-        
-%         figure();
-%         imshowpair(registered, mi, 'blend');
-        
-        images(:,:,c,i) = registered;
 
-        vals = registered(locs);
+        reg = images(:,:,c,i);
+        vals = reg(locs);
         V(:,i,c) = vals;
     end
+%      figure();
+%     imshowpair(images(:,:,:,i), mi, 'blend');
+
+     mi = images(:,:,:,i);
 end
 
-
-% 
-[r,c] = ind2sub(size(med_imgs), locs);
-imshow(images(:,:,:,5)./255);
-hold on
-plot(c,r,'r*');
-hold off
